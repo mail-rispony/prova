@@ -461,10 +461,14 @@ b <- function(){
     
     P1 <- as.matrix(bdiag(zeros,P))
     
-    id1<- 1:ncol(L)
-    id2 <- (ncol(L)+1):(ncol(L1)+2)
-    id3 <- (ncol(L)+2):(ncol(L1)+3)
-    id4 <- (ncol(L2)+4):ncol(X)
+ id1 <- seq_len(ncol(L))
+ 
+  id2 <- seq(max(id1) + 1, length.out  = ncol(L1))
+ 
+  id3 <- seq(max(id2) + 1, length.out  = ncol(L2))
+ 
+  id4 <- seq(max(id3) + 1, length.out  = ncol(B))
+
     
     invXtX.P <- solve(crossprod(X)+P1)
     b <- drop(invXtX.P %*% crossprod(X,y))
