@@ -1,3 +1,10 @@
+hfs_ <- function(){
+
+  “Harville-Fellner-Schall algorithm” 
+  
+}
+
+
 a <- function(){
   
   
