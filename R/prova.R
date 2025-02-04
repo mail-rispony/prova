@@ -1,6 +1,6 @@
 a <- function(){
 
-  print(“Harville-Fellner-Schall algorithm”)
+  print("Harville-Fellner-Schall algorithm")
   
   bspline<-function(x, ndx, xlr=NULL, knots=NULL, deg=3, deriv=0){
     #x: vettore di dati
