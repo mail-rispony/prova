@@ -572,3 +572,488 @@ b <- function(){
   #chiaramente occorre aggiustare i titoli dei plot
   
 }
+m <- function(){
+
+tpf<-function(x, K=4, p=1, quant=TRUE, intc=FALSE ){
+####################t
+#x: the covariate
+#K: the no of knots
+#quant: logical, if TRUE knots at quantiles
+#p: the polynomial degreee of the TPF
+#intc: if TRUE, a column of one's is added
+if(quant){
+  knots=quantile(x, probs = seq(0,1,l=K+2), 
+                 names=FALSE)[-c(1,K+2)]
+} else {
+  knots=seq(min(x), max(x), l=K+2)[-c(1,K+2)]
+}
+Z <-sapply(knots, function(.x)pmax(x-.x,0)^p)
+X<-cbind(poly(x, p, raw=TRUE), Z)
+if(intc) X<-cbind(1, X)
+attr(X, "plin")<-ncol(X)-ncol(Z)
+X
+}
+
+bspline<-function(x, ndx, xlr=NULL, knots=NULL, deg=3, deriv=0){
+  #x: vettore di dati
+  #xlr: il vettore di c(xl,xr)
+  #ndx: n.intervalli in cui dividere il range
+  #deg: il grado della spline
+  require(splines)
+  if(is.null(knots)){
+    if(is.null(xlr)){
+      xl<-min(x)-.01*diff(range(x))
+      xr<-max(x)+.01*diff(range(x))
+    } else {
+      if(length(xlr)!=2) stop("quando fornito, xlr deve avere due componenti")
+      xl<-xlr[1]
+      xr<-xlr[2]
+    }
+    dx<-(xr-xl)/ndx
+    knots<-seq(xl-deg*dx,xr+deg*dx,by=dx)
+  }
+  B<-splineDesign(knots,x,ord=deg+1,derivs=rep(deriv,length(x)))
+  B<-list(B=B, knots=knots)
+  B#the B-spline base matrix
+}#end_fn
+
+blockdiag <- function(...) {
+  args <- list(...)
+  nc <- sapply(args,ncol)
+  cumnc <- cumsum(nc)
+  ##  nr <- sapply(args,nrow)
+  ## NR <- sum(nr)
+  NC <- sum(nc)
+  rowfun <- function(m,zbefore,zafter) {
+    cbind(matrix(0,ncol=zbefore,nrow=nrow(m)),m,
+          matrix(0,ncol=zafter,nrow=nrow(m)))
+  }
+  ret <- rowfun(args[[1]],0,NC-ncol(args[[1]]))
+  for (i in 2:length(args)) {
+    ret <- rbind(ret,rowfun(args[[i]],cumnc[i-1],NC-cumnc[i]))
+  }
+  ret
+}
+##########################################
+my.fit<-function(y,x,n.int=5,deg=3, d=2, spar=0, xlr=NULL, 
+                 quant=FALSE, plot.it=0, conf.level=0, ...){
+  #n.int: no. of intervals
+  #quant: if TRUE, the knots are computed via quantiles
+  #   otherwise equally-spaced values
+  #plot.it: 0 =no plot, 1= plots data and fitted values
+  #         2: adds fitted values only
+  #... arguments to pass to points()
+  n<-length(y)
+  if(quant){
+    pr<-seq(0,1,l=n.int+1)
+    k<- quantile(x, probs=pr)
+  } else {
+    #equally spaced knots
+    k<- seq(min(x), max(x), l=n.int+1)
+  }
+  #browser()
+  B<-model.matrix(~0+factor(cut(x,
+                                k,include.lowest=T, labels=F)))
+  B <- bspline(x, ndx=n.int, deg=deg, xlr=xlr)
+  knots<-B$knots
+  B<-B$B
+  #sbrowser()
+  # B=NULL
+  # for(i in 1:(length(k)-1)) {
+  #   B[[length(B)+1]]<-1*(x>=k[i] & x<k[i+1])
+  # }
+  # B<-matrix(unlist(B), n, length(B))
+  #o=lm.fit(y=y,x=B)
+  #b<-o$coefficients
+  
+  #browser()
+  
+  D<-diff(diag(ncol(B)), dif=d)
+  #Xs<- rbind(B, sqrt(spar)*D)
+  #ys<-c(y, rep(0, nrows(D)))
+  #lm.fit(y=ys, x=Xs)
+  P<-crossprod(D)
+  BtB=crossprod(B)
+  invBtB.spar=solve(BtB+spar*P)
+  b=drop(invBtB.spar%*%t(B)%*%y)
+  fitted.values=drop(B%*%b)
+  edf<- sum(diag(BtB %*% invBtB.spar))
+  s2<-sum((y-fitted.values)^2)/(n-edf)
+  var.b<- s2*invBtB.spar %*% BtB %*% invBtB.spar
+  
+  if(plot.it>0){
+    xnew<- seq(min(x,xlr+.001),max(x,xlr-.001),l=300)
+    #Bnew<-model.matrix(~0+factor(cut(xnew,
+    #                              k,include.lowest=T, labels=F)))
+    #matplot(xnew,  Bnew%*%diag(o$coefficients), type="l", lwd=3)
+    Bnew<- bspline(xnew, ndx=n.int, deg=deg, xlr=xlr)#, knots=knots )
+    Bnew<-Bnew$B
+    hat.mu.new<- drop(Bnew%*%b)
+    if(plot.it==1) plot(x,y, xlim=range(knots))
+    lines(xnew, hat.mu.new, ...)
+    #browser()
+    if(conf.level>0){
+      #var.hat.mu.new<-Bnew %*% var.b %*% t(Bnew)
+      #se.hat.mu.new <- sqrt(diag(var.hat.mu.new))
+      se.hat.mu.new <-sqrt(rowSums((Bnew%*%var.b)*Bnew))
+      z<- -qnorm((1-conf.level)/2)
+      inf<- hat.mu.new-z*se.hat.mu.new
+      sup<- hat.mu.new+z*se.hat.mu.new
+      matlines(xnew, cbind(inf, sup), lty=3,...)
+      
+    }
+    #abline(v=knots, lty=3)
+    #browser()
+  }
+  hatsigma<- sqrt(sum((y-fitted.values)^2)/n)
+  ll<- sum(dnorm(y, fitted.values, sd=hatsigma,log=TRUE))
+  aic= -2*ll + 2*edf
+  bic= -2*ll + edf*log(n)
+  #browser()
+  r<-list(edf=edf, aic=aic, bic=bic, ress=y-fitted.values,
+          pen=drop(t(b)%*%P%*%b), s2=s2)
+  r
+}
+
+#####################################################################
+my.fit2<-function(y, Xsmooth, Xlin=NULL, spar) { 
+  n<-length(y)
+  Xsmooth<- as.matrix(Xsmooth)
+  if(length(spar)!=ncol(Xsmooth)) stop("smdsjdm")
+  #X<-cbind(Xsmooth, Xlin)
+  p<-B<-P<-NULL
+  #browser()
+  ndx=7
+  deg=3
+  C<-contr.treatment(ndx+deg)
+  for(j in 1:ncol(Xsmooth)){
+    B[[length(B)+1]]<-bspline(Xsmooth[,j], ndx=ndx, deg=deg)$B[,-1]
+    p[[length(p)+1]] <- ncol(B[[j]])
+    P[[length(P)+1]]<- spar[j]*crossprod(diff(diag(p[[j]]+1), d=2)%*%C)
+  }
+  
+  if(!is.null(Xlin)) {
+    Xlin<-cbind(1, as.matrix(Xlin))
+  } else {
+    Xlin<- matrix(1, nrow=n, ncol=1)
+  }
+  
+  X<-cbind(Xlin, do.call(cbind, B))
+  #browser()
+  P<-c(list(matrix(0, ncol(Xlin), ncol(Xlin))), P)
+  P=do.call(blockdiag, P)
+  b=drop(solve(crossprod(X)+P,crossprod(X,y)))
+  hat.mu<- drop(X%*%b)
+  H=crossprod(X) %*% solve(crossprod(X)+P)
+  edf.val<- diag(H)
+  #browser()
+  start<-0
+  edfL<-fitj<- vector("list", ncol(Xsmooth))
+  e=y-hat.mu
+  #browser()
+  for(j in 1:ncol(Xsmooth)){
+    id.ok <- ncol(Xlin)+(1:p[[j]])+start
+    start<-p[[j]]
+    bj<- b[id.ok]
+    muj<-drop(B[[j]]%*%bj)
+    muj<-muj[order(Xsmooth[,j])]
+    fitj[[j]]<-cbind(sort(Xsmooth[,j]), muj, muj+e)
+    edfL[[j]]<- sum(edf.val[id.ok])
+  }
+  #  browser()
+  r<-list(b=b, mu=hat.mu, part.eff=fitj, e=e, edfL=edfL, edf=sum(edf.val))
+  class(r)<-"nonpar24"
+  r
+}
+
+#####################################################
+hfs.fit = function(y,x, lmb0=.001, 
+                   n.int=30, itmax=20, tol=.0001,...){
+  #hfs algorithm
+  # ... arguments to pass to my.fit() for plotting (eg. plot.it=2, col=3)
+  for(k in 1:itmax){
+    cat("iter",k, " lmb:", lmb0, "\n")
+    o=my.fit(y,x,n.int=30, plot.it=0, spar=lmb0)
+    s2.pen= o$pen/o$edf
+    lmb1<-o$s2/s2.pen
+    if(abs(lmb1-lmb0)/lmb0< tol) break
+    lmb0<-lmb1
+  }
+  o=my.fit(y,x,n.int=30, spar=lmb0,...)
+  o
+}
+
+#==============================================
+
+my.fitVC<-function(y, Xsmooth, Zint=NULL, 
+                   Xlin=NULL, spar, intc=TRUE) { 
+  n<-length(y)
+  Xsmooth<- as.matrix(Xsmooth)
+  if(missing(spar)){
+    spar<-rep(0, ncol(Xsmooth))
+  } else {
+    if(length(spar)!=ncol(Xsmooth)) stop("smdsjdm")
+  }
+  #X<-cbind(Xsmooth, Xlin)
+  p<-B<-P<-Bplot<-NULL
+  #browser()
+  if(is.null(Zint)) {
+    id.vc=FALSE
+    Zint<-matrix(1, n, ncol(Xsmooth))
+  } else {
+    id.vc=TRUE
+    Zint<-as.matrix(Zint)
+    if(ncol(Zint)!=ncol(Xsmooth)) stop("if provided, Zint... ")
+  }
+  #sbrowser()
+  C<-contr.treatment(7+3) #ndx+deg
+  for(j in 1:ncol(Xsmooth)){
+    Bplot[[length(Bplot)+1]]<- BB<-bspline(Xsmooth[,j], ndx=7, deg=3)$B[,-1]
+    B[[length(B)+1]]<- diag(Zint[,j])%*%BB
+    p[[length(p)+1]] <- ncol(B[[j]])
+    P[[length(P)+1]]<- spar[j]*crossprod(diff(diag(p[[j]]+1), d=2)%*%C)
+  }
+  
+  if(!is.null(Xlin)) {
+    Xlin<-cbind(1, as.matrix(Xlin))
+  } else {
+    Xlin<- matrix(1, nrow=n, ncol=1)
+  }
+  if(id.vc) {
+    id.ok=which(colSums(Zint)!=n)
+    Zint<-Zint[,id.ok]
+    Xlin<-  cbind(Xlin, Zint)
+  }
+  
+  X<-cbind(Xlin, do.call(cbind, B))
+  P<-c(list(matrix(0, ncol(Xlin), ncol(Xlin))), P)
+  P=do.call(blockdiag, P)
+  if(!intc) {
+    X<-X[,-1]
+    P<-P[-1,-1]
+  }
+  
+  b=drop(solve(crossprod(X)+P,crossprod(X,y)))
+  hat.mu<- drop(X%*%b)
+  H=crossprod(X) %*% solve(crossprod(X)+P)
+  edf.val<- diag(H)
+  #browser()
+  start<-0
+  edfL<-fitj<- vector("list", ncol(Xsmooth))
+  e=y-hat.mu
+  #browser()
+  for(j in 1:ncol(Xsmooth)){
+    id.ok <- ncol(Xlin)+(1:p[[j]])+start -(!intc)
+    start<-p[[j]]
+    bj<- b[id.ok]
+    muj<-drop(Bplot[[j]]%*%bj)
+    muj<-muj[order(Xsmooth[,j])]
+    fitj[[j]]<-cbind(sort(Xsmooth[,j]), muj, muj+e)
+    edfL[[j]]<- sum(edf.val[id.ok])
+  }
+  #  browser()
+  r<-list(b=b, mu=hat.mu, part.eff=fitj, e=e, edfL=edfL, edf=sum(edf.val))
+  class(r)<-"nonpar24"
+  r
+}
+
+
+nonp.dens<- function(x, breaks=30, spar=-1, d=2, deg=3,
+                     ndx=10,itmax=20, plot=TRUE, dens=FALSE, add=FALSE, coll=1){
+  #browser()
+  o=hist(x, breaks, plot=FALSE)
+  xx= o$mids
+  yy=o$counts
+  if(spar<0){
+    lmb0<-.0001
+    for(j in 1:itmax){
+      #if(j==9) 
+      #browser()
+      r=my.glm.fit2(yy, xx,
+                    family=ExpoFamily("poisson"), 
+                    spar=lmb0, d=d, ndx=ndx, deg=deg)
+      b<-drop(r$beta)
+      #browser()
+      edf=sum(diag(r$hatM))
+      s2<-sum(diff(b[-1],d)^2)/(edf-1)
+      cat("it", j, "   lmb:", lmb0, "\n")
+      lmb0.old<-lmb0
+      lmb0<- min(1/s2, 10e+5)
+      if(abs((lmb0.old-lmb0)/lmb0.old)<.001) break
+    }
+    spar=lmb0
+  } else {
+    r=my.glm.fit2(yy, xx,
+                  family=ExpoFamily("poisson"), 
+                  spar=spar, d=d, ndx=ndx, deg=deg)
+  }
+  if(plot){
+    if(dens) {
+      adj=1/(diff(xx)[1]*sum(yy))
+      mylab="density"
+    } else {
+      adj=1
+      mylab="frequency"
+    }
+   if(!add) plot(xx, yy*adj, ylab=mylab) else points(xx, yy*adj)
+    lines(r$fittednew[,1], r$fittednew[,2]*adj , lwd=3, col=coll)
+  }
+  r$counts<-yy
+  r$xmids<-xx
+  r
+}
+
+
+my.glm.fit2<-function(y, Xsmooth, Xlin=NULL, 
+                      family, spar=0, d=2, ndx=10, deg=3) { 
+  n<-length(y)
+  Xsmooth<- as.matrix(Xsmooth)
+  if(length(spar)!=ncol(Xsmooth)) stop("smdsjdm")
+  #X<-cbind(Xsmooth, Xlin)
+  p<-B<-P<-NULL
+  #browser()
+  C<-contr.treatment(ndx+deg)
+  for(j in 1:ncol(Xsmooth)){
+    #B[[length(B)+1]]<-bspline(Xsmooth[,j], ndx=ndx, deg=deg)$B[,-1]
+    B[[length(B)+1]]<-bspline(Xsmooth[,j], ndx=ndx, deg=deg)$B%*%C #remove the 1st column
+    p[[length(p)+1]] <- ncol(B[[j]])
+    P[[length(P)+1]]<- spar[j]*crossprod(diff(diag(p[[j]]+1), d=d)%*%C)
+  }
+  
+  if(!is.null(Xlin)) {
+    Xlin<-cbind(1, as.matrix(Xlin))
+  } else {
+    Xlin<- matrix(1, nrow=n, ncol=1)
+  }
+  
+  X<-cbind(Xlin, do.call(cbind, B))
+  #browser()
+  P<-c(list(matrix(0, ncol(Xlin), ncol(Xlin))), P)
+  P=do.call(blockdiag, P)
+  #browser()
+  b0<- c(mean(y), rep(.001, ncol(X)-1))
+  #browser()
+  
+  o=IWLSp(X, y, P, b0, family=family)
+  newx=seq(min(Xsmooth), max(Xsmooth), l=100 )
+  Bnew=bspline(newx, ndx=ndx, deg=deg)$B[,-1]
+  mu.new=exp(Bnew%*%o$beta[-1]+o$beta[1])
+  o$fittednew<-cbind(newx, mu.new)
+  o
+}
+
+
+ExpoFamily <- function(distribution = c("gaussian", "poisson", "binomial", "inverse", "gamma"),
+                       link) {
+  distribution <- match.arg(distribution)
+  if (missing(link)) {
+    link <- switch(distribution,
+                   gaussian = "identity",
+                   poisson = "log",
+                   binomial = "logit",
+                   inverse = "inverse",
+                   gamma = "inverse")
+  } else {
+    link_validi <- c("identity", "log", "logit", "inverse", "sqrt")
+    link <- match.arg(link, link_validi)
+  }
+  
+  mu_fun <- switch(link,
+                   identity = function(eta) eta,
+                   log = function(eta) exp(eta),
+                   sqrt = function(eta) eta ^ 2,
+                   logit = function(eta) 1 / (1 + exp(-eta)),
+                   inverse = function(eta) 1 / eta)
+  
+  dmu_deta <- switch(link,
+                     identity = function(eta) rep(1, length(eta)),
+                     log = function(eta) exp(eta),
+                     sqrt = function(eta) 2 * eta,
+                     logit = function(eta) exp(-eta) / (1 + exp(-eta))^2,
+                     inverse = function(eta) -1 / (eta ^ 2))
+  
+  var_fun <- switch(distribution,
+                    gaussian = function(mu) rep(1, length(mu)),
+                    poisson = function(mu) mu,
+                    binomial = function(mu) mu * (1 - mu),
+                    inverse = function(mu) mu ^ 3,
+                    gamma = function(mu) mu ^ 2)
+  
+  deviance_residual <- function(y, mu, family) {
+    mu <- pmax(mu, .Machine$double.eps)
+    
+    switch(family$distribution,
+           gaussian = sum((y - mu) ^ 2),
+           binomial = -2 * sum(y * log(ifelse(mu == 0, 1, mu)) + (1 - y) * log(ifelse(1 - mu == 0, 1, 1 - mu))),
+           poisson = 2 * sum(ifelse(y == 0, 0, y * log(y / mu)) - (y - mu)),
+           gamma = -2 * sum(log(ifelse(y == 0, 1, y / mu)) - (y - mu) / mu),
+           inverse = sum((y - mu)^2 / (y * (mu^2)))
+    )
+  }
+  
+  list(mu_fun = mu_fun, var_fun = var_fun, dmu_deta = dmu_deta,
+       deviance_residual = deviance_residual, distribution = distribution)
+}
+
+
+IWLSp <- function(X, y, P, beta_start, family, 
+                 nsteps = 100L, eps = 1e-6, verbose = FALSE) {
+  mu_fun <- family$mu_fun
+  var_fun <- family$var_fun
+  dmu_deta <- family$dmu_deta
+  distribution <- family$distribution
+  eta <- drop(X %*% beta_start)
+  mu <- mu_fun(eta)
+  residuals <- y - mu  
+  for (i in seq_len(nsteps)) {
+    dmu <- dmu_deta(eta)
+    V <- var_fun(mu)
+    y_tilde <- eta + ((y - mu) / dmu)
+    W <- dmu^2 / V
+    H <- crossprod(X, W * X) +P
+    alpha <- crossprod(X, W * y_tilde)
+    beta_new <- solve(H, alpha)
+    Norm2_db <- sqrt(sum((beta_new - beta_start)^2))
+    if (verbose) cat("Step", i, " ||db|| = ", Norm2_db, "\n")
+    if (Norm2_db <= eps) {
+      conv <- TRUE
+      break
+    } else {
+      conv <- FALSE
+      beta_start <- beta_new
+    }
+    
+    eta <- drop(X %*% beta_start)
+    mu <- mu_fun(eta)
+    residuals <- y - mu  
+  }
+  
+  dmu_final <- dmu_deta(eta)
+  V_final <- var_fun(mu)
+  W_final <- dmu_final^2 / V_final
+  H_final <- crossprod(X, W_final * X)+P
+  hatM <- crossprod(X, W * X) %*% solve(H_final)
+  list(beta = beta_start, H = H_final, conv = conv, fitted.values = mu, 
+       hatM=hatM, residuals = residuals, V_final = V_final, distribution = distribution)
+}
+
+
+aic.biv<-function(B1,B2,y,l1,l2,d1,d2){
+  B<-tens(B1,B2)
+  D1<-diff(diag(ncol(B1)), d=d1)
+  D2<-diff(diag(ncol(B2)), d=d2)
+  
+  P1<-crossprod(D1) %x% diag(ncol(B2))
+  P2<-diag(ncol(B1)) %x% crossprod(D2)
+  BtB<-crossprod(B)
+  b=solve(BtB+l1*P1+l2*P2, crossprod(B,y))
+  hat.mu=drop(B%*%b)
+  H<-BtB%*%solve(BtB+l1*P1+l2*P2)
+  edf=sum(diag(H))
+  s2= sum((y-hat.mu)^2)/length(y)
+  r<- -2*sum(dnorm(y, hat.mu, sqrt(s2), log=TRUE))+2*edf
+  r
+}
+
+  
+}
